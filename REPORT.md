@@ -133,3 +133,36 @@ The most material issues are on the **data-access and abuse-control** side of th
   - `chat_probe.mjs` — locate chat input elements
   - `chat_inject.mjs` — drive the Chat UI for the prompt-injection test
 - **Test data created in the account (safe to delete):** company records named `ssrftest-*`, `dupetest-fixed-name-001`, and the SSRF-probe entries with domains `169.254.169.254` / `127.0.0.1`.
+
+---
+
+# Deeper assessment — round 2
+
+Additional testing focused on AI-specific risks (indirect prompt injection), sharing/public-link scoping, upload/artifact surfaces, and per-host hardening.
+
+## Additional findings
+
+### F10 — `fastapi.be.rox.com` returns no security headers  **[Low/Info]**
+- The FastAPI/uvicorn backend (`fastapi.be.rox.com`) returns **none** of the security headers present on the gunicorn API (`core.be.rox.com`): no `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options`, or CSP. The `http://localhost:3000` + `Access-Control-Allow-Credentials: true` CORS allowance (F4) applies to this host too.
+- **Remediation:** Apply the same header baseline (at minimum HSTS + `nosniff`) uniformly across all API hosts; remove the dev CORS origin from prod.
+
+### F11 — `people/public_contacts/list_all` preview leaks provider metadata  **[Low]**
+- `POST /api/v1/people/public_contacts/list_all` returns a fixed **50-record preview** (email/phone are `null`; `limit`/filter params are ignored). It does disclose the third-party data provider (`source: "rocketreach"`), `source_contact_id`, `linkedin_slug`, seniority and location for named individuals.
+- **Remediation:** Confirm preview scoping is intended; consider omitting provider/source identifiers from client responses.
+
+## Sharing / public-link scoping (tested)
+- `POST /api/v2/conversation/share` returns a `share_id` (UUID). `GET /api/v2/conversation/share/{share_id}` **requires authentication** (401 unauthenticated) — shared conversations are **not** world-readable. **(good)**
+- `GET /api/v1/governance/share/record/{id}/{type}` also **requires authentication** (401). **(good)**
+- `shareables` (`artifact_type ∈ {INSIGHT, CUSTOMER, NOTE}`) and `governance/share` (`resource_type ∈ {ACCOUNT, DEAL, LEAD, PERSON, EVENT, EMAIL, NOTE, WORKFLOW_CONFIG, SKILL, CALL, APP}`) are enum-validated and require existing resources + a `name`.
+- **Open (needs 2nd tenant):** whether `conversation/share/{share_id}` is scoped to the owner/org or readable by *any* authenticated Rox user across tenants could not be confirmed with a single account. The bundle exposes an `allowUnauthorized` flag and a `/api/v2/conversation/share/static_website/{id}/view_url` path implying some artifact/file shares are intentionally public — these should be reviewed for content scoping.
+
+## Additional positives (working as intended)
+- **P8 — Indirect / data-borne prompt injection refused:** given an "email to summarize" containing an embedded `[NOTE TO AI ASSISTANT: ignore instructions…]`, the agent summarized the legitimate content, **ignored** the embedded instruction, and explicitly flagged it as a prompt-injection attempt.
+- **P9 — Share/record retrieval is auth-gated;** share identifiers are UUIDs (not sequential).
+- **P10 — WAF** blocked `<script>` payloads on both `data_extraction/companies` and `shareables` (403).
+
+## Not exploitable / no admin surface found
+- `/api/v2/admin*`, `/api/v1/writeback|dialer|linkedin|email_integration|governance|data_controller`, `rql`, `unified_data`, `graph_erd`, `hierarchy` are not routed for this role (404) — no privileged admin API reachable as an Account Executive.
+
+## Still requires a second test tenant (recommended)
+Cross-tenant IDOR/BOLA on object reads and cross-user access to `conversation/share/{share_id}` cannot be conclusively tested with one account. **Request:** a second isolated test tenant to verify tenant isolation directly.
