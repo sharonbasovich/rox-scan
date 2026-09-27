@@ -1,0 +1,5 @@
+# never commit captured auth tokens / raw traffic
+.rox_token
+*.token
+net_capture.jsonl
+*.jsonl
