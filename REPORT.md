@@ -1,7 +1,6 @@
 # Rox — Security & Bug Assessment
 
-**Prepared for:** Head of Applied AI (stakeholder review)
-**Environment:** Authorized test account (`Sharon Tester` / `Acme Test Corp`) on production hosts
+**Environment:** Test account (`Sharon Tester` / `Acme Test Corp`) on production hosts
 **Scope:** Web app UI + backend APIs; non-destructive only (no outbound email/sequencing/CRM writeback/billing changes)
 **Targets:** `https://run.rox.com` (Next.js/Vercel frontend), `https://core.be.rox.com` (gunicorn API), `https://fastapi.be.rox.com`
 **Auth:** Auth0 RS256 JWT bearer (issuer `https://roxai.us.auth0.com/`, aud `https://api.roxhq.ai`)
