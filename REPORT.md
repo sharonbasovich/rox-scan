@@ -74,11 +74,16 @@ The most material issues are on the **data-access and abuse-control** side of th
 - **Impact:** A page/app served on a victim's `http://localhost:3000` (malware, a hostile local dev server, or a developer running untrusted local code) can make **credentialed** cross-origin reads of the prod API. Low likelihood, but a dev origin should never be trusted by production.
 - **Remediation:** Remove `http://localhost:3000` from the production allow-list (env-gate it to non-prod builds).
 
-### F5 — Raw database exception leaked to client  **[Low]**
-- **Endpoint:** `POST /api/v1/data_extraction/companies` (concurrent duplicate insert)
-- **Observed:** Under a race (concurrent inserts of the same name), the API returned **HTTP 500** with a raw `psycopg2.errors.UniqueViolation`, disclosing the DB engine and the internal constraint name `uix_public_entity_rox_company_data_org_name_address_lower`. The normal duplicate path returns a clean `409 {"message":"Company already exists"}`, so this is an **uncaught-exception edge**, not the happy path.
-- **Impact:** Information disclosure (DB tech + schema naming) aids further attacks.
-- **Remediation:** Catch integrity errors and return a generic 409/400; ensure a global exception handler strips driver-level messages/stack traces in production.
+### F5 — Raw database exception leaked to client (SQL + schema + org UUID)  **[Low–Medium]**
+- **Endpoint:** `POST /api/v1/data_extraction/companies` (duplicate insert not caught by the app-level dedup)
+- **Observed:** Reliably reproducible — an insert whose `(org, lower(name), lower(address))` collides but is missed by the app's "already exists" pre-check hits the DB constraint uncaught and returns **HTTP 500** with the **raw `psycopg2` error**, including:
+  - DB engine (`psycopg2` / SQLAlchemy) and constraint name `uix_public_entity_rox_company_data_org_name_address_lower`
+  - the `DETAIL:` line echoing the tenant **org UUID** and the exact key values
+  - the **raw SQL**: `INSERT INTO entity_rox_company_data (rox_org_id, rox_company_id, name, domain, ...)` — leaking the real table + column names
+  - The normal duplicate path returns a clean `409 {"message":"Company already exists"}`; all other write endpoints tested (`notes`, `prospect_lists`, `entity_tags`, `leads`) return clean `400/422`. So this is specific to this insert path, not global.
+- **SQLi:** Not indicated — the leaked statement uses bound parameters (`[SQL: INSERT ... ] [parameters: ...]`), so values are not concatenated.
+- **Impact:** Information disclosure of DB engine, schema (table/column/constraint names), and tenant org identifier — useful reconnaissance.
+- **Remediation:** Catch `IntegrityError` on this path and return a generic 409; add a global exception handler that strips driver-level messages/SQL/stack traces in production (`PROPAGATE_EXCEPTIONS`/`DEBUG` off).
 
 ### F6 — Internal identifiers leaked in error messages  **[Low]**
 - **Repro:** `GET /api/v1/deals/<random-v4-uuid>` → `403 {"messages":["User <caller-user-uuid> does not have access to retrieve deal <uuid>"]}`; `GET /api/v1/people/<uuid>` and `/integrations/<uuid>` → `404 ... "not found in org 35b4f847_99ec_4308_99ab_955e5b3c9010"`.
@@ -132,7 +137,7 @@ The most material issues are on the **data-access and abuse-control** side of th
   - `storage_probe.mjs` — localStorage/sessionStorage/cookie token check
   - `chat_probe.mjs` — locate chat input elements
   - `chat_inject.mjs` — drive the Chat UI for the prompt-injection test
-- **Test data created in the account (safe to delete):** company records named `ssrftest-*`, `dupetest-fixed-name-001`, and the SSRF-probe entries with domains `169.254.169.254` / `127.0.0.1`.
+- **Test data created in the account (safe to delete):** company records named `ssrftest-*`, `dupetest-*`, `waf*`, `mathprobe-*`, `m5-*`, the SSRF-probe entries with domains `169.254.169.254` / `127.0.0.1`, one test lead, and one `conversation/share`.
 
 ---
 
