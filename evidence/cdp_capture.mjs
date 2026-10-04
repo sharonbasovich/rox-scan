@@ -15,8 +15,18 @@ import fs from 'fs';
 // with looser permissions (mode on createWriteStream only applies at creation).
 // Still git-ignored; never commit this file.
 const CAP = '/home/ubuntu/net_capture.jsonl';
-const out = fs.createWriteStream(CAP, {flags:'a', mode:0o600});
-try { fs.chmodSync(CAP, 0o600); } catch (e) { console.error('chmod failed', e.message); }
+// Open the fd ourselves, then fchmod that fd (not the path) so we enforce 0600
+// on a pre-existing file with no path/symlink race. If we can't secure it, abort
+// rather than append live auth headers to a world-readable file.
+let fd;
+try {
+  fd = fs.openSync(CAP, 'a', 0o600);
+  fs.fchmodSync(fd, 0o600);
+} catch (e) {
+  console.error('cannot secure capture file, refusing to write:', e.message);
+  process.exit(1);
+}
+const out = fs.createWriteStream(CAP, {fd});
 ws.onopen = () => { send('Network.enable'); console.error('Network.enable sent'); };
 ws.onmessage = (ev) => {
   let msg; try { msg = JSON.parse(ev.data); } catch { return; }
