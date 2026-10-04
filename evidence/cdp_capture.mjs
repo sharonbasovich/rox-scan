@@ -10,7 +10,9 @@ let id = 0;
 const send = (method, params={}) => ws.send(JSON.stringify({id: ++id, method, params}));
 const reqs = new Map();
 import fs from 'fs';
-const out = fs.createWriteStream('/home/ubuntu/net_capture.jsonl', {flags:'a'});
+// Capture may contain live auth headers -> create owner-only (0600) so other
+// local users can't read it. Still git-ignored; never commit this file.
+const out = fs.createWriteStream('/home/ubuntu/net_capture.jsonl', {flags:'a', mode:0o600});
 ws.onopen = () => { send('Network.enable'); console.error('Network.enable sent'); };
 ws.onmessage = (ev) => {
   let msg; try { msg = JSON.parse(ev.data); } catch { return; }
@@ -23,7 +25,10 @@ ws.onmessage = (ev) => {
     const rec = {ts:Date.now(), url:r.response.url, method:req.method, status:r.response.status,
       reqHeaders:req.headers, postData:req.postData, respHeaders:r.response.headers, mime:r.response.mimeType};
     out.write(JSON.stringify(rec)+'\n');
+    reqs.delete(r.requestId); // drop completed request so memory doesn't grow with traffic
   }
 };
 ws.onerror = (e)=>console.error('ws err', e.message);
-setInterval(()=>{}, 1<<30);
+// Keep the process alive while capturing; exit cleanly when the page/socket closes.
+const keepAlive = setInterval(()=>{}, 1<<30);
+ws.onclose = () => { clearInterval(keepAlive); reqs.clear(); out.end(() => process.exit(0)); };

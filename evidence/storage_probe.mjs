@@ -17,7 +17,12 @@ const expr = `(()=>{
 })()`;
 const res = await call('Runtime.evaluate',{expression:expr,returnByValue:true});
 console.log(res.result.value);
-// also check cookie httpOnly via document.cookie visibility
-const ck = await call('Runtime.evaluate',{expression:'document.cookie',returnByValue:true});
-console.log('document.cookie (JS-visible):', JSON.stringify(ck.result.value));
+// also check cookie httpOnly via document.cookie visibility.
+// Print only metadata (names + count), never raw cookie values, so session
+// cookies aren't leaked to terminal logs.
+const ck = await call('Runtime.evaluate',{expression:`(()=>{
+  const names=document.cookie.split(';').map(c=>c.split('=')[0].trim()).filter(Boolean);
+  return JSON.stringify({jsVisibleCookieCount:names.length, jsVisibleCookieNames:names});
+})()`,returnByValue:true});
+console.log('document.cookie (JS-visible, names only):', ck.result.value);
 process.exit(0);
