@@ -10,9 +10,13 @@ let id = 0;
 const send = (method, params={}) => ws.send(JSON.stringify({id: ++id, method, params}));
 const reqs = new Map();
 import fs from 'fs';
-// Capture may contain live auth headers -> create owner-only (0600) so other
-// local users can't read it. Still git-ignored; never commit this file.
-const out = fs.createWriteStream('/home/ubuntu/net_capture.jsonl', {flags:'a', mode:0o600});
+// Capture may contain live auth headers -> owner-only (0600) so other local
+// users can't read it. chmod enforces this even if the file already exists
+// with looser permissions (mode on createWriteStream only applies at creation).
+// Still git-ignored; never commit this file.
+const CAP = '/home/ubuntu/net_capture.jsonl';
+const out = fs.createWriteStream(CAP, {flags:'a', mode:0o600});
+try { fs.chmodSync(CAP, 0o600); } catch (e) { console.error('chmod failed', e.message); }
 ws.onopen = () => { send('Network.enable'); console.error('Network.enable sent'); };
 ws.onmessage = (ev) => {
   let msg; try { msg = JSON.parse(ev.data); } catch { return; }
@@ -27,8 +31,11 @@ ws.onmessage = (ev) => {
     out.write(JSON.stringify(rec)+'\n');
     reqs.delete(r.requestId); // drop completed request so memory doesn't grow with traffic
   }
+  // requests that error out never get a response -> drop them too, else they leak
+  if (msg.method === 'Network.loadingFailed') { reqs.delete(msg.params.requestId); }
 };
 ws.onerror = (e)=>console.error('ws err', e.message);
-// Keep the process alive while capturing; exit cleanly when the page/socket closes.
+// Keep the process alive while capturing; exit when the page/socket closes.
+// Non-zero exit on an unclean close so interrupted captures aren't reported as success.
 const keepAlive = setInterval(()=>{}, 1<<30);
-ws.onclose = () => { clearInterval(keepAlive); reqs.clear(); out.end(() => process.exit(0)); };
+ws.onclose = (ev) => { clearInterval(keepAlive); reqs.clear(); out.end(() => process.exit(ev && ev.wasClean ? 0 : 1)); };
