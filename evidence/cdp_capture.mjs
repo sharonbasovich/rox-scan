@@ -10,7 +10,23 @@ let id = 0;
 const send = (method, params={}) => ws.send(JSON.stringify({id: ++id, method, params}));
 const reqs = new Map();
 import fs from 'fs';
-const out = fs.createWriteStream('/home/ubuntu/net_capture.jsonl', {flags:'a'});
+// Capture may contain live auth headers -> owner-only (0600) so other local
+// users can't read it. chmod enforces this even if the file already exists
+// with looser permissions (mode on createWriteStream only applies at creation).
+// Still git-ignored; never commit this file.
+const CAP = '/home/ubuntu/net_capture.jsonl';
+// Open the fd ourselves, then fchmod that fd (not the path) so we enforce 0600
+// on a pre-existing file with no path/symlink race. If we can't secure it, abort
+// rather than append live auth headers to a world-readable file.
+let fd;
+try {
+  fd = fs.openSync(CAP, 'a', 0o600);
+  fs.fchmodSync(fd, 0o600);
+} catch (e) {
+  console.error('cannot secure capture file, refusing to write:', e.message);
+  process.exit(1);
+}
+const out = fs.createWriteStream(CAP, {fd});
 ws.onopen = () => { send('Network.enable'); console.error('Network.enable sent'); };
 ws.onmessage = (ev) => {
   let msg; try { msg = JSON.parse(ev.data); } catch { return; }
@@ -23,7 +39,13 @@ ws.onmessage = (ev) => {
     const rec = {ts:Date.now(), url:r.response.url, method:req.method, status:r.response.status,
       reqHeaders:req.headers, postData:req.postData, respHeaders:r.response.headers, mime:r.response.mimeType};
     out.write(JSON.stringify(rec)+'\n');
+    reqs.delete(r.requestId); // drop completed request so memory doesn't grow with traffic
   }
+  // requests that error out never get a response -> drop them too, else they leak
+  if (msg.method === 'Network.loadingFailed') { reqs.delete(msg.params.requestId); }
 };
 ws.onerror = (e)=>console.error('ws err', e.message);
-setInterval(()=>{}, 1<<30);
+// Keep the process alive while capturing; exit when the page/socket closes.
+// Non-zero exit on an unclean close so interrupted captures aren't reported as success.
+const keepAlive = setInterval(()=>{}, 1<<30);
+ws.onclose = (ev) => { clearInterval(keepAlive); reqs.clear(); out.end(() => process.exit(ev && ev.wasClean ? 0 : 1)); };
